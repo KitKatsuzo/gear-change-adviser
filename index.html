@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>ギアコーチ</title>
+<style>
+  :root { --ok:#1f9d55; --heavy:#d64545; --light:#2f6fd6; --idle:#3a3f47; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; background:#111; color:#fff; font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  #zone { min-height:100vh; padding:calc(12px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
+          transition:background .25s; background:var(--idle); display:flex; flex-direction:column; gap:10px; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; font-size:13px; }
+  .chip { padding:4px 9px; border-radius:99px; background:rgba(0,0,0,.35); }
+  .chip.on { background:rgba(255,255,255,.92); color:#111; }
+  #advice { font-size:min(12vw,60px); font-weight:800; text-align:center; line-height:1.15; min-height:2.5em;
+            display:flex; align-items:center; justify-content:center; padding:6px 0; }
+  #sub { text-align:center; font-size:15px; opacity:.85; min-height:1.3em; margin-top:-6px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .cell { background:rgba(0,0,0,.28); border-radius:12px; padding:8px; text-align:center; }
+  .cell .v { font-size:38px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .cell .l { font-size:12px; opacity:.8; }
+  .cell.big { grid-column:span 2; }
+  .cell.big .v { font-size:76px; line-height:1.05; }
+  button { font:inherit; font-size:15px; padding:13px; border-radius:10px; border:0; background:rgba(255,255,255,.92); color:#111; font-weight:700; }
+  button.ghost { background:rgba(0,0,0,.35); color:#fff; }
+  button.sel { outline:3px solid #fff; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row > button { flex:1; }
+  details { background:rgba(0,0,0,.3); border-radius:12px; padding:10px; }
+  summary { font-weight:700; cursor:pointer; }
+  label { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:9px 0; font-size:14px; }
+  input[type=number], select { width:120px; font-size:15px; padding:6px; border-radius:6px; border:0; }
+  input[type=range] { flex:1; }
+  .note { font-size:12px; opacity:.75; margin:2px 0 6px; }
+  .warn { background:#000b; border-radius:10px; padding:10px; font-size:13px; display:none; }
+  #log { font-size:12px; opacity:.7; white-space:pre-line; max-height:7em; overflow:hidden; }
+  .ride { background:rgba(0,0,0,.3); border-radius:10px; padding:10px; margin:8px 0; font-size:14px; }
+  .ride .t { font-weight:700; margin-bottom:4px; }
+  .ride .row button { font-size:13px; padding:8px; }
+  body.riding .setup { display:none; }
+  #bStart.stop { background:#111; color:#fff; border:2px solid #fff; }
+</style>
+</head>
+<body>
+<div id="zone">
+  <div class="chips">
+    <span class="chip" id="cPow">パワー</span>
+    <span class="chip" id="cCad">ケイデンス</span>
+    <span class="chip" id="cSpd">速度センサー</span>
+    <span class="chip" id="cGps">GPS</span>
+    <span class="chip" id="cRun">停止中</span>
+  </div>
+  <div class="warn" id="demoBanner">デモ版です。センサーにはつながりません。下の「シミュレーション再生」で、仮想ライダーがコースを走る様子を見られます。</div>
+  <div class="warn" id="warn"></div>
+  <div class="warn" id="warnHidden">画面を消すと音声が止まります。走行中はこの画面を表示したままにしてください。</div>
+
+  <div id="advice">準備中</div>
+  <div id="sub"></div>
+
+  <div class="grid">
+    <div class="cell big"><div class="v" id="vCad">--</div><div class="l">ケイデンス rpm ／ 目標 <span id="vTarget">90</span></div></div>
+    <div class="cell"><div class="v" id="vSpd">--</div><div class="l">速度 km/h</div></div>
+    <div class="cell"><div class="v" id="vPow">--</div><div class="l">パワー W（3秒平均）</div></div>
+    <div class="cell"><div class="v" id="vGear">--</div><div class="l">いまのギア（推定）</div></div>
+    <div class="cell"><div class="v" id="vRec">--</div><div class="l">おすすめ</div></div>
+    <div class="cell"><div class="v" id="vDist">0.00</div><div class="l">距離 km</div></div>
+    <div class="cell"><div class="v" id="vGrade">--</div><div class="l">勾配 %</div></div>
+  </div>
+
+  <div class="row"><button id="bStart">▶ スタート</button></div>
+  <div class="row" id="ringBtns"></div>
+
+  <div class="setup">
+    <div class="row" style="margin-bottom:8px">
+      <button class="ghost" id="bPow">パワーメーター</button>
+      <button class="ghost" id="bCad">ケイデンスセンサー</button>
+      <button class="ghost" id="bSpd">速度センサー</button>
+    </div>
+    <div class="note">タップして接続。ケイデンスと速度が一体のセンサーは、どちらか片方のボタンで両方取れます。速度センサーを使うときは「タイヤ周長」を正しく設定してください。</div>
+    <div class="row" style="margin-bottom:8px">
+      <button class="ghost" id="bTest">音声テスト</button>
+      <button class="ghost" id="bInstall" style="display:none">ホーム画面に追加</button>
+    </div>
+
+    <details>
+      <summary>設定</summary>
+      <label>平地の目標ケイデンス <input type="number" id="sTarget" min="60" max="120"></label>
+      <label>登りの目標ケイデンス <input type="number" id="sClimbTarget" min="55" max="110"></label>
+      <label>「登り」とみなす勾配 % <input type="number" id="sClimbGrade" min="1" max="10" step="0.5"></label>
+      <label>許容幅 ±rpm <input type="number" id="sTol" min="3" max="20"></label>
+      <label>外れてから指示するまで 秒 <input type="number" id="sHold" min="0" max="5" step="0.5"></label>
+      <label>指示の最短間隔 秒 <input type="number" id="sCool" min="2" max="30"></label>
+      <label>先読み指示（勾配×パワー） <select id="sPro"><option value="1">オン</option><option value="0">オフ</option></select></label>
+      <div class="note">勾配が変わったとき、今のパワーで落ち着く速度を予測して、必要な段数をまとめて先に伝えます。パワーメーターがない場合は速度と勾配からパワーを推定します（精度は下がります）。</div>
+      <label>体重＋車体 kg <input type="number" id="sMass" min="40" max="150"></label>
+      <label>クランク（歯数） <input type="text" id="sRings" inputmode="numeric" style="width:150px" placeholder="50-34"></label>
+      <div class="note">例：50-34、52-36、53-39、フロントシングルなら 42、トリプルなら 50-39-30</div>
+      <label>スプロケットのプリセット
+        <select id="sCasPreset" style="width:170px">
+          <option value="">選んでください</option>
+          <option value="11-12-13-14-15-16-17-19-21-24-27-30">12速 11-30</option>
+          <option value="11-12-13-14-15-16-17-19-21-23-25-28">12速 11-28</option>
+          <option value="11-12-13-14-16-18-20-22-24-27-30-34">12速 11-34</option>
+          <option value="11-12-13-14-15-17-19-21-24-27-30">11速 11-30</option>
+          <option value="11-12-13-14-15-17-19-21-23-25-28">11速 11-28</option>
+          <option value="11-12-13-14-16-18-20-22-25-28-32">11速 11-32</option>
+          <option value="11-13-15-17-19-21-23-25-27-30-34">11速 11-34</option>
+          <option value="10-11-12-13-14-15-17-19-21-24-28-33">12速 10-33（SRAM）</option>
+          <option value="10-11-12-13-14-15-17-19-21-24-28-36">12速 10-36（SRAM）</option>
+          <option value="11-12-13-14-15-17-19-21-24-28">10速 11-28</option>
+        </select></label>
+      <label>スプロケット（歯数） <input type="text" id="sCogs" style="width:100%;max-width:260px" placeholder="11-12-13-..."></label>
+      <div class="note">小さい順に全部の歯数を「-」区切りで。プリセットにない場合は直接入力してください。</div>
+      <div class="note" id="gearInfo"></div>
+      <label>タイヤ周長 mm <input type="number" id="sCirc" min="1900" max="2400"></label>
+      <div class="note">700×25C≒2105、28C≒2136、32C≒2155</div>
+      <label>音声 <select id="sVoice"><option value="1">オン</option><option value="0">オフ</option></select></label>
+      <label>話す速さ <input type="number" id="sRate" min="0.8" max="2" step="0.1"></label>
+    </details>
+
+    <details style="margin-top:8px">
+      <summary>デモモード（センサーなしで試す）</summary>
+      <div class="row" style="margin:8px 0"><button id="bSim">▶ シミュレーション再生（仮想ライダー）</button></div>
+      <div class="note">平地 → 6%の登り → 緩い登り → 下り → 平地 のコースを仮想ライダーが走り、音声の指示どおりに変速します。</div>
+      <label><span>手動デモ（スライダーで操作）</span><input type="checkbox" id="dOn"></label>
+      <label>速度 <input type="range" id="dSpd" min="0" max="55" step="0.5" value="28"><span id="dSpdV">28</span></label>
+      <label>ケイデンス <input type="range" id="dCad" min="0" max="130" value="70"><span id="dCadV">70</span></label>
+      <label>パワー(0=なし) <input type="range" id="dPow" min="0" max="500" step="5" value="200"><span id="dPowV">200</span></label>
+      <label>勾配 % <input type="range" id="dGrade" min="-12" max="15" step="0.5" value="0"><span id="dGradeV">0</span></label>
+    </details>
+
+    <details style="margin-top:8px">
+      <summary>走行履歴</summary>
+      <div id="hist"></div>
+    </details>
+  </div>
+
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+// ================= 設定 =================
+const OLD_CASSETTES = {
+  "12s": [11,12,13,14,15,16,17,19,21,24,27,30],
+  "11s": [11,12,13,14,15,17,19,21,24,27,30]
+};
+const cfg = { target:90, climbTarget:80, climbGrade:4, tol:7, hold:1, cooldown:5, proactive:true,
+              mass:80, rings:[50,34], cogs:OLD_CASSETTES["12s"], circ:2105, voice:true, rate:1.2 };
+try { const s = localStorage.getItem("gearcoach"); if (s) Object.assign(cfg, JSON.parse(s)); } catch(e) {}
+// 旧バージョンの設定（11速/12速の選択）を引き継ぐ
+if (cfg.cassette && OLD_CASSETTES[cfg.cassette] && !cfg.cogsSet) { cfg.cogs = OLD_CASSETTES[cfg.cassette]; }
+delete cfg.cassette;
+
+// 「50-34」「11,12,13」などを数字の配列に
+function parseTeeth(text){
+  const nums = String(text).split(/[^0-9]+/).filter(Boolean).map(Number);
+  return nums.every(n => n >= 9 && n <= 60) ? nums : null;
+}
+function saveCfg(){ try { localStorage.setItem("gearcoach", JSON.stringify(cfg)); } catch(e) {} }
+
+const $ = id => document.getElementById(id);
+function log(msg){ const el = $("log"); el.textContent = (new Date().toLocaleTimeString().slice(0,8) + " " + msg + "\n" + el.textContent).slice(0, 800); }
+
+// ================= ギア計算 =================
+function combos(){
+  const cogs = cfg.cogs, n = cogs.length, rings = cfg.rings, nr = rings.length, out = [];
+  const k = nr >= 3 ? 3 : 2; // たすき掛けとみなす端の枚数
+  rings.forEach((r, ri) => cogs.forEach((c, ci) => {
+    const cross = nr > 1 && ((ri === 0 && ci >= n-k) || (ri === nr-1 && ci <= k-1)); // たすき掛け
+    out.push({ ring:r, ri, cog:c, ci, dev: r/c * cfg.circ/1000, cross });
+  }));
+  return out;
+}
+const gearKey = g => g ? `${g.ring}×${g.cog}` : "--";
+
+let knownRing = null; // 0=一番大きいチェーンリング
+function detectGear(speed, cad){
+  if (!(speed > 2) || !(cad > 30)) return null;
+  const dev = speed / (cad/60);
+  // たすき掛けはまず使わないので、ほぼ同じギア比なら普通の組み合わせを優先
+  const all = combos().map(g => ({ g, err: Math.abs(g.dev - dev)/g.dev, score: Math.abs(g.dev - dev)/g.dev + (g.cross ? 0.04 : 0) }))
+                      .sort((a,b) => a.score - b.score);
+  if (all[0].err > 0.09) return null; // 惰性・変速中など
+  if (knownRing !== null) {
+    const same = all.find(x => x.g.ri === knownRing);
+    if (same && same.err < 0.06) return same.g;
+  }
+  knownRing = all[0].g.ri; markRing();
+  return all[0].g;
+}
+function recommendFor(speed, cur, target){
+  let best = null, score = Infinity;
+  for (const g of combos()) {
+    if (g.cross) continue;
+    let s = Math.abs(speed / g.dev * 60 - target);
+    if (g.ri !== cur.ri) s += 6; // フロント変速はなるべく避ける
+    if (s < score) { score = s; best = g; }
+  }
+  return best;
+}
+function phrase(cur, rec){
+  const d = rec.ci - cur.ci;
+  const rear = d === 0 ? "" : (d > 0 ? `${d}枚軽く` : `${-d}枚重く`);
+  if (rec.ri === cur.ri) return rear;
+  const nr = cfg.rings.length;
+  const front = rec.ri === 0 ? "アウターへ" : (rec.ri === nr-1 ? "インナーへ" : "センターへ");
+  return rear ? `${front}、${rear}` : front;
+}
+
+// パワーと勾配から、落ち着く速度を推定（物理モデル）
+// 速度 v (m/s) で勾配 gradePct を走るのに必要なパワー
+function modelPower(v, gradePct){
+  const m = cfg.mass, g = 9.81, crr = 0.005, cda = 0.32, rho = 1.2, eff = 0.97;
+  const th = Math.atan(gradePct/100);
+  return v * (m*g*(crr*Math.cos(th) + Math.sin(th)) + 0.5*rho*cda*v*v) / eff;
+}
+function solveSpeed(power, gradePct){
+  const f = v => modelPower(v, gradePct) - power;
+  let lo = 0.5, hi = 25;
+  if (f(lo) > 0) return lo;
+  if (f(hi) < 0) return hi;
+  for (let i = 0; i < 40; i++) { const mid = (lo+hi)/2; if (f(mid) > 0) hi = mid; else lo = mid; }
+  return (lo+hi)/2;
+}
+
+// ================= センサー =================
+const st = { power:null, powerAt:0, pows:[], cad:null, cadAt:0, wheelSpd:null, wheelAt:0,
+             gpsSpd:null, gpsAt:0, grade:null, gradeAt:0, grades:[] };
+const crankPrev = {}, wheelPrev = {};
+
+function onCrank(src, revs, t, res){
+  const now = performance.now(), p = crankPrev[src];
+  if (!p) { crankPrev[src] = { revs, t, at:now }; return; }
+  const dr = (revs - p.revs + 65536) % 65536;
+  const dt = ((t - p.t + 65536) % 65536) / res;
+  if (dr > 0 && dt > 0) {
+    const c = dr / dt * 60;
+    if (c < 200) { st.cad = st.cad == null || st.cad === 0 ? c : st.cad*0.35 + c*0.65; st.cadAt = now; }
+    crankPrev[src] = { revs, t, at:now };
+  } else if (now - p.at > 2500) { st.cad = 0; st.cadAt = now; }
+}
+function onWheel(src, revs, t, res){
+  const now = performance.now(), p = wheelPrev[src];
+  if (!p) { wheelPrev[src] = { revs, t, at:now }; return; }
+  const dr = revs - p.revs;
+  const dt = ((t - p.t + 65536) % 65536) / res;
+  if (dr > 0 && dt > 0) {
+    const v = dr * cfg.circ/1000 / dt;
+    if (v < 30) { st.wheelSpd = v; st.wheelAt = now; }
+    wheelPrev[src] = { revs, t, at:now };
+  } else if (now - p.at > 3000) { st.wheelSpd = 0; st.wheelAt = now; }
+}
+function parsePower(dv){
+  let o = 0; const flags = dv.getUint16(o, true); o += 2;
+  const now = performance.now();
+  st.power = dv.getInt16(o, true); st.powerAt = now; o += 2;
+  st.pows.push([now, st.power]);
+  if (flags & 0x01) o += 1;
+  if (flags & 0x04) o += 2;
+  if (flags & 0x10) { onWheel("cp", dv.getUint32(o, true), dv.getUint16(o+4, true), 2048); o += 6; }
+  if (flags & 0x20) { onCrank("cp", dv.getUint16(o, true), dv.getUint16(o+2, true), 1024); o += 4; }
+}
+function parseCsc(dv, src){
+  let o = 0; const flags = dv.getUint8(o); o += 1;
+  if (flags & 0x01) { onWheel(src, dv.getUint32(o, true), dv.getUint16(o+4, true), 1024); o += 6; }
+  if (flags & 0x02) { onCrank(src, dv.getUint16(o, true), dv.getUint16(o+2, true), 1024); o += 4; }
+}
+
+async function connectBle(kind){
+  if (!navigator.bluetooth) { showWarn(); return; }
+  const svc = kind === "power" ? 0x1818 : 0x1816;
+  const chr = kind === "power" ? 0x2a63 : 0x2a5b;
+  const parse = kind === "power" ? parsePower : (dv => parseCsc(dv, kind));
+  const chip = { power: $("cPow"), cad: $("cCad"), spd: $("cSpd") }[kind];
+  try {
+    const dev = await navigator.bluetooth.requestDevice({ filters:[{ services:[svc] }] });
+    let manual = false;
+    const subscribe = async () => {
+      const server = await dev.gatt.connect();
+      const c = await (await server.getPrimaryService(svc)).getCharacteristic(chr);
+      c.addEventListener("characteristicvaluechanged", e => parse(e.target.value));
+      await c.startNotifications();
+      chip.classList.add("on"); log(`${dev.name || kind} 接続`);
+    };
+    dev.addEventListener("gattserverdisconnected", () => {
+      chip.classList.remove("on");
+      if (manual) return;
+      log(`${dev.name || kind} 切断 → 再接続中`);
+      if (running) speak("センサーが切れました。再接続します", true);
+      const retry = (n) => setTimeout(() => subscribe().then(() => { if (running) speak("再接続しました", true); })
+                                              .catch(() => n < 30 && retry(n+1)), 2000);
+      retry(0);
+    });
+    await subscribe();
+  } catch(e) { if (e.name !== "NotFoundError") log("接続失敗: " + e.message); }
+}
+
+// ================= GPS・勾配 =================
+let gpsWatch = null, lastPos = null, gpsDist = 0, altPts = [];
+function startGps(){
+  if (!navigator.geolocation || gpsWatch !== null) return;
+  gpsWatch = navigator.geolocation.watchPosition(p => {
+    let s = p.coords.speed, step = 0;
+    if (lastPos) {
+      const R = 6371000, toR = x => x*Math.PI/180;
+      const dLat = toR(p.coords.latitude - lastPos.coords.latitude), dLon = toR(p.coords.longitude - lastPos.coords.longitude);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toR(lastPos.coords.latitude))*Math.cos(toR(p.coords.latitude))*Math.sin(dLon/2)**2;
+      step = 2*R*Math.asin(Math.sqrt(a));
+      const dt = (p.timestamp - lastPos.timestamp)/1000;
+      if ((s == null || isNaN(s)) && dt > 0) s = step / dt;
+    }
+    lastPos = p;
+    if (s != null && !isNaN(s)) { st.gpsSpd = st.gpsSpd == null ? s : st.gpsSpd*0.4 + s*0.6; st.gpsAt = performance.now(); }
+    $("cGps").classList.add("on");
+    if (p.coords.accuracy < 30) { gpsDist += step; updateGrade(gpsDist, p.coords.altitude); }
+  }, e => { log("GPS: " + e.message); $("cGps").classList.remove("on"); },
+     { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
+}
+function updateGrade(d, alt){
+  if (alt == null || isNaN(alt)) return;
+  const last = altPts[altPts.length-1];
+  if (last && d - last.d < 3) return;
+  altPts.push({ d, a: alt });
+  while (altPts.length && d - altPts[0].d > 120) altPts.shift();
+  if (altPts.length < 5 || d - altPts[0].d < 40) return;
+  const n = altPts.length, md = altPts.reduce((x,p)=>x+p.d,0)/n, ma = altPts.reduce((x,p)=>x+p.a,0)/n;
+  let num = 0, den = 0;
+  for (const p of altPts) { num += (p.d-md)*(p.a-ma); den += (p.d-md)**2; }
+  if (den <= 0) return;
+  const g = Math.max(-25, Math.min(25, num/den*100));
+  st.grade = st.grade == null ? g : st.grade*0.6 + g*0.4; st.gradeAt = performance.now();
+}
+
+// ================= 値の取得 =================
+const demo = () => $("dOn").checked;
+function getSpeed(now){
+  if (sim) return sim.v;
+  if (demo()) return +$("dSpd").value / 3.6;
+  if (st.wheelSpd != null && now - st.wheelAt < 3000) return st.wheelSpd;
+  if (st.gpsSpd != null && now - st.gpsAt < 5000) return st.gpsSpd;
+  return null;
+}
+function getCad(now){
+  if (sim) return sim.cad;
+  if (demo()) return +$("dCad").value;
+  if (st.cad != null && now - st.cadAt < 3000) return st.cad;
+  return null;
+}
+function getPower(now){
+  if (sim) return sim.p;
+  if (demo()) { const v = +$("dPow").value; return v > 0 ? v : null; } // 0 = パワーメーターなし
+  while (st.pows.length && now - st.pows[0][0] > 3000) st.pows.shift();
+  if (!st.pows.length) return null;
+  return st.pows.reduce((a,b) => a + b[1], 0) / st.pows.length;
+}
+function getGrade(now){
+  if (sim) return sim.grade;
+  if (demo()) return +$("dGrade").value;
+  if (st.grade != null && now - st.gradeAt < 15000) return st.grade;
+  return null;
+}
+function gradeDelta(now, grade){
+  if (grade == null) { st.grades = []; return null; }
+  st.grades.push([now, grade]);
+  while (st.grades.length && now - st.grades[0][0] > 10000) st.grades.shift();
+  if (now - st.grades[0][0] < 4000) return null;
+  return grade - st.grades[0][1];
+}
+
+// ================= シミュレーション（仮想ライダー） =================
+// [長さ m, 勾配 %, ライダーが出したいパワー W, 区間名]
+const COURSE = [
+  [450,  0, 190, "平地"],
+  [380,  6, 260, "登り 6%"],
+  [260,  2, 220, "緩い登り 2%"],
+  [520, -5,  90, "下り -5%"],
+  [450,  0, 200, "平地"]
+];
+let sim = null;
+function simStart(){
+  // 最初はアウターで、平地で回しやすいギアから
+  const start = combos().filter(g => !g.cross && g.ri === 0)
+    .reduce((a,b) => Math.abs(7.5/b.dev*60 - 88) < Math.abs(7.5/a.dev*60 - 88) ? b : a);
+  sim = { d:0, v:7.5, p:190, grade:0, cad:88, ri:start.ri, ci:start.ci, seg:-1, queue:[], nextShiftAt:0, lastAt:performance.now() };
+  $("bSim").textContent = "■ シミュレーション停止";
+  if (!running) $("bStart").click();
+}
+function simStop(){
+  sim = null; $("bSim").textContent = "▶ シミュレーション再生（仮想ライダー）";
+}
+// 音声の指示を聞いて、少し遅れて1段ずつ変速する
+function simHear(rec, now){
+  if (!sim) return;
+  sim.queue = [];
+  if (rec.ri !== sim.ri) sim.queue.push({ ri: rec.ri });
+  const step = rec.ci > sim.ci ? 1 : -1;
+  for (let c = sim.ci; c !== rec.ci; c += step) sim.queue.push({ ci: c + step });
+  sim.nextShiftAt = now + 900; // 反応時間
+}
+function simStep(now){
+  if (!sim) return;
+  const dt = Math.min(0.5, (now - sim.lastAt)/1000); sim.lastAt = now;
+  // 区間
+  let acc = 0, idx = 0;
+  const total = COURSE.reduce((a,c) => a + c[0], 0);
+  if (sim.d >= total) { log("シミュレーション：コース完走"); speak("コース完走です", true); simStop(); return; }
+  for (idx = 0; idx < COURSE.length; idx++) { if (sim.d < acc + COURSE[idx][0]) break; acc += COURSE[idx][0]; }
+  const [, grade, want, name] = COURSE[idx];
+  if (idx !== sim.seg) { sim.seg = idx; log(`コース：${name}`); }
+  sim.grade = grade;
+  // 変速
+  if (sim.queue.length && now >= sim.nextShiftAt) {
+    const s = sim.queue.shift();
+    if (s.ri != null) sim.ri = s.ri; if (s.ci != null) sim.ci = s.ci;
+    sim.nextShiftAt = now + 350;
+  }
+  const g = combos().find(x => x.ri === sim.ri && x.ci === sim.ci);
+  const cadFree = sim.v / g.dev * 60;
+  // 重すぎると踏めない／軽すぎると回しきれない
+  let p = want;
+  if (cadFree < 65) p *= Math.max(0.45, cadFree / 65);
+  if (cadFree > 110) p *= Math.max(0.2, 1 - (cadFree - 110) / 25);
+  sim.p = sim.p + (p - sim.p) * Math.min(1, dt * 2);
+  // 運動方程式
+  const m = cfg.mass, th = Math.atan(grade/100);
+  const resist = m*9.81*(0.005*Math.cos(th) + Math.sin(th)) + 0.5*1.2*0.32*sim.v*sim.v;
+  const a = (sim.p*0.97 / Math.max(sim.v, 1.5) - resist) / (m * 1.05);
+  sim.v = Math.max(1.5, sim.v + a*dt);
+  sim.d += sim.v * dt;
+  sim.cad = sim.v / g.dev * 60 + (Math.random() - 0.5) * 3;
+  // スライダーにも反映（見た目用）
+  $("dSpdV").textContent = (sim.v*3.6).toFixed(1); $("dCadV").textContent = Math.round(sim.cad);
+  $("dPowV").textContent = Math.round(sim.p); $("dGradeV").textContent = grade;
+}
+
+// ================= 音声 =================
+let jaVoice = null;
+function pickVoice(){
+  if (!window.speechSynthesis) return;
+  const vs = speechSynthesis.getVoices();
+  jaVoice = vs.find(v => v.lang === "ja-JP" && v.localService) || vs.find(v => v.lang && v.lang.startsWith("ja")) || null;
+}
+if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speak(text, force){
+  if ((!cfg.voice && !force) || !window.speechSynthesis) return;
+  speechSynthesis.cancel(); // 古い指示は捨てて最新だけ話す
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ja-JP"; u.rate = cfg.rate; if (jaVoice) u.voice = jaVoice;
+  speechSynthesis.speak(u);
+}
+
+// ================= 画面維持 =================
+let wakeLock = null;
+async function keepAwake(){ try { wakeLock = await navigator.wakeLock.request("screen"); } catch(e) {} }
+document.addEventListener("visibilitychange", () => {
+  if (!running) return;
+  if (document.visibilityState === "visible") { keepAwake(); $("warnHidden").style.display = "none"; }
+  else $("warnHidden").style.display = "block";
+});
+function showWarn(){
+  const w = $("warn"); w.style.display = "block";
+  w.textContent = "このブラウザは Bluetooth 接続に対応していません。Android の Chrome で開いてください（iPhone なら Bluefy など Web Bluetooth 対応ブラウザ）。";
+}
+
+// ================= コーチング本体 =================
+let running = false, offSince = null, lastSpoke = 0, lastText = "";
+let lastGearKey = null, gearChangedAt = 0, lastAdvice = null, estPow = null, proLock = null, proGradeRef = null, spdHist = [], flatPow = null;
+
+function coach(now, spd, cad, pow, grade){
+  $("vSpd").textContent = spd == null ? "--" : (spd*3.6).toFixed(1);
+  $("vCad").textContent = cad == null ? "--" : Math.round(cad);
+  $("vPow").textContent = pow == null ? "--" : Math.round(pow);
+  $("vGrade").textContent = grade == null ? "--" : (grade > 0 ? "+" : "") + grade.toFixed(1);
+
+  const climbing = grade != null && grade >= cfg.climbGrade;
+  const target = climbing ? cfg.climbTarget : cfg.target;
+  $("vTarget").textContent = target;
+  const gd = gradeDelta(now, grade);
+
+  const zone = $("zone"), adv = $("advice"), sub = $("sub");
+  // 加速度（直近2秒の速度変化）
+  if (spd != null) { spdHist.push([now, spd]); while (spdHist.length && now - spdHist[0][0] > 2000) spdHist.shift(); }
+  else spdHist = [];
+  const acc = spdHist.length > 2 && now - spdHist[0][0] > 1000 ? (spd - spdHist[0][1]) / ((now - spdHist[0][0])/1000) : 0;
+  const cur = (spd != null && cad != null) ? detectGear(spd, cad) : null;
+  $("vGear").textContent = gearKey(cur);
+
+  if (!cur) {
+    zone.style.background = "var(--idle)"; $("vRec").textContent = "--"; sub.textContent = "";
+    adv.textContent = !running ? "停止中" : (cad === 0 ? "惰性走行" : "データ待ち");
+    offSince = null; return { status: cad === 0 ? "coast" : "idle", cur, target };
+  }
+
+  // 変速を検知 → 落ち着くまで少し待つ
+  const key = gearKey(cur);
+  if (key !== lastGearKey) {
+    if (lastGearKey) {
+      gearChangedAt = now;
+      if (lastAdvice && key === gearKey(lastAdvice.rec)) log(`指示どおり ${key} に変速`);
+    }
+    lastGearKey = key; offSince = null;
+  }
+  const settling = now - gearChangedAt < 2000;
+
+  const diff = cad - target;
+  const status = Math.abs(diff) <= cfg.tol ? "ok" : (diff < 0 ? "heavy" : "light");
+
+  // パワーメーターがないときは、勾配が一定の区間の速度からパワーを推定しておく
+  if (pow == null && spd > 3 && grade != null && cad > 30 && (gd == null || Math.abs(gd) < 0.8)) {
+    const pe = Math.max(0, modelPower(spd, grade));
+    estPow = estPow == null ? pe : estPow*0.92 + pe*0.08;
+  }
+  const powNow = pow != null ? pow : estPow;
+  // 平坦路でふだん出しているパワーを覚えておく（下りで脚を止めていた後の予測に使う）
+  if (powNow != null && powNow > 50 && grade != null && Math.abs(grade) < 2) flatPow = flatPow == null ? powNow : flatPow*0.97 + powNow*0.03;
+  // きつくなる方向の変化では、少なくともふだんのパワーは出すと見込む
+  const powUse = powNow != null && gd != null && gd > 0 && flatPow != null ? Math.max(powNow, flatPow) : powNow;
+
+  // ① 先読み：勾配が変わった → 今のパワーで落ち着く速度に合うギアをまとめて指示
+  let advice = null;
+  // 同じ勾配変化に対して先読みは1回だけ
+  const newSlope = proGradeRef == null || (grade != null && Math.abs(grade - proGradeRef) >= 1.5);
+  if (cfg.proactive && !settling && newSlope && powUse != null && powUse > 60 && grade != null && gd != null && Math.abs(gd) >= 1.5) {
+    const vp = solveSpeed(powUse, grade);
+    if (Math.abs(vp - spd) / spd > 0.12) {
+      const predCad = vp / cur.dev * 60;
+      if (Math.abs(predCad - target) > cfg.tol) {
+        const rec = recommendFor(vp, cur, target);
+        if (rec && gearKey(rec) !== key) {
+          const head = gd > 0 ? (grade >= 2 ? "登ります" : "減速します") : (grade <= -2 ? "下ります" : "ゆるみます");
+          advice = { rec, vp, text: `${head}、${phrase(cur, rec)}`, show: phrase(cur, rec), pro: true,
+                     heavy: rec.dev < cur.dev, label: `${head}（先読み）` };
+        }
+      }
+    }
+  }
+  // 先読みで変速した直後は、速度が落ち着く（加減速がほぼ止まる）まで逆向きの指示を出さない
+  if (proLock && (now > proLock.until || Math.abs(spd - proLock.vp) / proLock.vp < 0.1 ||
+                  (now - proLock.at > 6000 && Math.abs(acc) < 0.05))) proLock = null;
+  // ② 通常：今のケイデンスが目標から外れている
+  //    加速・減速中は約3秒後の速度を見込んでギアを選ぶ（行き過ぎ防止）
+  if (!advice && status !== "ok") {
+    const vRef = Math.min(spd*1.4, Math.max(spd*0.6, spd + acc*3));
+    const rec = recommendFor(vRef, cur, target);
+    if (gearKey(rec) === key) {
+      zone.style.background = diff < 0 ? "var(--heavy)" : "var(--light)";
+      adv.textContent = diff < 0 ? "これ以上軽いギアなし" : "これ以上重いギアなし";
+      $("vRec").textContent = key; sub.textContent = ""; offSince = null;
+      return { status, cur, target };
+    }
+    const lighter = rec.dev < cur.dev;
+    if (proLock && lighter !== proLock.lighter) {
+      zone.style.background = "var(--ok)"; adv.textContent = "そのまま"; $("vRec").textContent = key;
+      sub.textContent = proLock.lighter ? "減速を待っています" : "加速を待っています"; offSince = null;
+      return { status, cur, target };
+    }
+    advice = { rec, text: phrase(cur, rec), show: phrase(cur, rec), pro: false, heavy: diff < 0, label: "" };
+  }
+
+  if (!advice) {
+    zone.style.background = "var(--ok)"; adv.textContent = "OK"; $("vRec").textContent = key;
+    sub.textContent = climbing ? "登りモード" : ""; offSince = null;
+    return { status, cur, target };
+  }
+
+  zone.style.background = advice.heavy ? "var(--heavy)" : "var(--light)";
+  adv.textContent = advice.show;
+  $("vRec").textContent = gearKey(advice.rec);
+  sub.textContent = (advice.label ? advice.label + "：" : "") + `${key} → ${gearKey(advice.rec)}`;
+
+  if (offSince === null) offSince = now;
+  const held = advice.pro || now - offSince >= cfg.hold * 1000;
+  // 先読み指示と、前回の指示のあとに変速した場合はすぐ次を言う。同じ指示の連呼は避ける
+  const gap = (advice.pro && advice.text !== lastText) || gearChangedAt > lastSpoke ? 1500
+            : (advice.text === lastText ? 2 : 1) * cfg.cooldown * 1000;
+  if (running && !settling && held && now - lastSpoke > gap) {
+    speak(advice.text); lastSpoke = now; lastText = advice.text; lastAdvice = advice;
+    if (sim) simHear(advice.rec, now);
+    if (advice.pro) { proLock = { at: now, until: now + 20000, vp: advice.vp, lighter: advice.rec.dev < cur.dev }; proGradeRef = grade; }
+    if (ride) ride.cues.push([Math.round(ride.elapsed), advice.text, key, gearKey(advice.rec), advice.pro ? "pro" : "react"]);
+  }
+  return { status, cur, target };
+}
+
+// ================= 記録 =================
+const RIDES_KEY = "gearcoach_rides", CUR_KEY = "gearcoach_current";
+let ride = null, lastTickAt = null, lastSampleAt = 0, lastAutosave = 0;
+
+function newRide(){
+  return { id: Date.now(), start: new Date().toISOString(), dist: 0, moving: 0, elapsed: 0, samples: [], cues: [],
+           cfg: { target: cfg.target, climbTarget: cfg.climbTarget, rings: cfg.rings, cogs: cfg.cogs } };
+}
+function fmtTime(sec){
+  sec = Math.floor(sec);
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+function record(now, spd, cad, pow, grade, cur, status, target){
+  if (!running || !ride) { lastTickAt = null; return; }
+  const dt = lastTickAt == null ? 0 : (now - lastTickAt)/1000;
+  lastTickAt = now;
+  ride.elapsed += dt;
+  if (spd != null && dt < 5) { ride.dist += spd*dt; if (spd > 1) ride.moving += dt; }
+  if (now - lastSampleAt >= 1000) {
+    lastSampleAt = now;
+    ride.samples.push([
+      Math.round(ride.elapsed),
+      spd == null ? null : +(spd*3.6).toFixed(1),
+      cad == null ? null : Math.round(cad),
+      pow == null ? null : Math.round(pow),
+      cur ? `${cur.ring}x${cur.cog}` : null,
+      status,
+      +(ride.dist/1000).toFixed(3),
+      grade == null ? null : +grade.toFixed(1),
+      target
+    ]);
+  }
+  if (now - lastAutosave > 30000) { lastAutosave = now; try { localStorage.setItem(CUR_KEY, JSON.stringify(ride)); } catch(e) {} }
+  $("vDist").textContent = (ride.dist/1000).toFixed(2);
+}
+function summarize(r){
+  const s = r.samples, mv = s.filter(x => x[1] != null && x[1] > 3.6);
+  const avg = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+  const cads = mv.map(x => x[2]).filter(x => x != null && x > 0);
+  const pows = mv.map(x => x[3]).filter(x => x != null);
+  const judged = s.filter(x => ["ok","heavy","light"].includes(x[5]));
+  const pct = k => judged.length ? Math.round(judged.filter(x => x[5] === k).length / judged.length * 100) : null;
+  return {
+    distKm: +(r.dist/1000).toFixed(2), moving: fmtTime(r.moving),
+    avgSpd: r.moving > 0 ? +(r.dist/r.moving*3.6).toFixed(1) : null,
+    avgCad: cads.length ? Math.round(avg(cads)) : null,
+    avgPow: pows.length ? Math.round(avg(pows)) : null,
+    okPct: pct("ok"), heavyPct: pct("heavy"), lightPct: pct("light"), cues: r.cues.length
+  };
+}
+function loadRides(){ try { return JSON.parse(localStorage.getItem(RIDES_KEY) || "[]"); } catch(e) { return []; } }
+function storeRides(rides){
+  while (true) {
+    try { localStorage.setItem(RIDES_KEY, JSON.stringify(rides)); return true; }
+    catch(e) {
+      if (rides.length <= 1) { log("保存容量が足りません。CSVで書き出して古い記録を削除してください"); return false; }
+      log("容量不足のため一番古い記録を削除しました"); rides.shift();
+    }
+  }
+}
+function saveRide(r){
+  if (!r || r.samples.length < 5) { log("記録が短いため保存しませんでした"); try { localStorage.removeItem(CUR_KEY); } catch(e) {} return false; }
+  r.summary = summarize(r);
+  const rides = loadRides(); rides.push(r);
+  if (!storeRides(rides)) return false;
+  try { localStorage.removeItem(CUR_KEY); } catch(e) {}
+  log(`保存しました: ${r.summary.distKm} km / ${r.summary.moving}`);
+  renderHist();
+  return true;
+}
+function toCsv(r){
+  const s = r.summary || summarize(r);
+  const meta = [`# start,${r.start}`, `# distance_km,${s.distKm}`, `# moving_time,${s.moving}`,
+    `# avg_speed_kmh,${s.avgSpd ?? ""}`, `# avg_cadence,${s.avgCad ?? ""}`, `# avg_power,${s.avgPow ?? ""}`,
+    `# ok_pct,${s.okPct ?? ""}`, `# heavy_pct,${s.heavyPct ?? ""}`, `# light_pct,${s.lightPct ?? ""}`, `# cues,${s.cues}`];
+  const cues = r.cues.map(c => `# cue,${c.join(",")}`);
+  const head = "elapsed_s,speed_kmh,cadence_rpm,power_w,gear,status,distance_km,grade_pct,target_rpm";
+  const rows = r.samples.map(x => x.map(v => v == null ? "" : v).join(","));
+  return [...meta, ...cues, head, ...rows].join("\n");
+}
+function download(r){
+  const blob = new Blob(["﻿" + toCsv(r)], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `gearcoach_${r.start.slice(0,16).replace(/[:T]/g,"-")}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function renderHist(){
+  const box = $("hist"), rides = loadRides().slice().reverse();
+  box.innerHTML = rides.length ? "" : "<div class='note' style='margin-top:8px'>まだ記録はありません</div>";
+  rides.forEach(r => {
+    const s = r.summary || summarize(r), d = new Date(r.start);
+    const el = document.createElement("div"); el.className = "ride";
+    el.innerHTML = `<div class="t">${d.toLocaleDateString("ja-JP")} ${d.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"})}${r.recovered ? "（復元）" : ""}</div>
+      <div>${s.distKm} km ・ 走行時間 ${s.moving} ・ 平均 ${s.avgSpd ?? "--"} km/h</div>
+      <div>平均ケイデンス ${s.avgCad ?? "--"} rpm ・ 平均パワー ${s.avgPow ?? "--"} W</div>
+      <div>目標内 ${s.okPct ?? "--"}% ／ 重すぎ ${s.heavyPct ?? "--"}% ／ 軽すぎ ${s.lightPct ?? "--"}% ・ 指示 ${s.cues} 回</div>
+      <div class="row" style="margin-top:6px"><button class="dl">CSV保存</button><button class="ghost del">削除</button></div>`;
+    el.querySelector(".dl").onclick = () => download(r);
+    const del = el.querySelector(".del");
+    del.onclick = () => {
+      if (del.dataset.armed) { storeRides(loadRides().filter(x => x.id !== r.id)); renderHist(); }
+      else { del.dataset.armed = "1"; del.textContent = "もう一度押すと削除"; setTimeout(() => { del.dataset.armed = ""; del.textContent = "削除"; }, 3000); }
+    };
+    box.appendChild(el);
+  });
+}
+
+// ================= ループ =================
+function tick(){
+  const now = performance.now();
+  simStep(now);
+  const spd = getSpeed(now), cad = getCad(now), pow = getPower(now), grade = getGrade(now);
+  let r = { status:"idle", cur:null, target:cfg.target };
+  try { r = coach(now, spd, cad, pow, grade); }
+  catch(e) { log("エラー: " + e.message); }
+  finally { record(now, spd, cad, pow, grade, r.cur, r.status, r.target); }
+}
+setInterval(tick, 250);
+
+// ================= UI =================
+let stopArmed = false;
+function setRunning(on){
+  running = on;
+  document.body.classList.toggle("riding", on);
+  $("bStart").textContent = on ? "■ ストップ" : "▶ スタート";
+  $("bStart").classList.toggle("stop", on);
+  $("cRun").textContent = on ? "記録中" : "停止中";
+  $("cRun").classList.toggle("on", on);
+}
+$("bStart").onclick = () => {
+  if (!running) {
+    ride = newRide(); lastTickAt = null; lastSampleAt = 0; lastSpoke = 0; lastText = ""; lastGearKey = null; proLock = null; proGradeRef = null;
+    $("vDist").textContent = "0.00";
+    setRunning(true); startGps(); keepAwake();
+    speak("ギアコーチ、スタート", true);
+    return;
+  }
+  // 誤操作防止：2回押しで終了
+  if (!stopArmed) {
+    stopArmed = true; $("bStart").textContent = "もう一度押すと終了";
+    setTimeout(() => { stopArmed = false; if (running) $("bStart").textContent = "■ ストップ"; }, 3000);
+    return;
+  }
+  stopArmed = false; setRunning(false);
+  if (sim) simStop();
+  try { wakeLock && wakeLock.release(); } catch(e) {}
+  if (saveRide(ride)) speak("記録を保存しました", true);
+  ride = null;
+};
+$("bPow").onclick = () => connectBle("power");
+$("bSim").onclick = () => sim ? simStop() : simStart();
+$("bCad").onclick = () => connectBle("cad");
+$("bSpd").onclick = () => connectBle("spd");
+function ringName(ri){ const nr = cfg.rings.length; return ri === 0 ? "アウター" : (ri === nr-1 ? "インナー" : "センター"); }
+function buildRingBtns(){
+  const box = $("ringBtns"); box.innerHTML = "";
+  if (cfg.rings.length < 2) { box.style.display = "none"; return; }
+  box.style.display = "";
+  cfg.rings.forEach((r, ri) => {
+    const b = document.createElement("button"); b.className = "ghost"; b.dataset.ri = ri;
+    b.textContent = `いま${ringName(ri)}(${r})`;
+    b.onclick = () => { knownRing = ri; markRing(); };
+    box.appendChild(b);
+  });
+  markRing();
+}
+function markRing(){ document.querySelectorAll("#ringBtns button").forEach(b => b.classList.toggle("sel", +b.dataset.ri === knownRing)); }
+
+// ギア構成の入力
+function gearInfo(){
+  const c = combos(), devs = c.map(g => g.dev);
+  const lo = c.reduce((a,b) => a.dev < b.dev ? a : b), hi = c.reduce((a,b) => a.dev > b.dev ? a : b);
+  $("gearInfo").textContent = `${cfg.rings.length}×${cfg.cogs.length}速 ／ 一番軽い ${gearKey(lo)}（90rpmで${(lo.dev*90*0.06).toFixed(1)}km/h）・一番重い ${gearKey(hi)}（90rpmで${(hi.dev*90*0.06).toFixed(1)}km/h）`;
+}
+function applyGears(){
+  const rings = parseTeeth($("sRings").value), cogs = parseTeeth($("sCogs").value);
+  if (!rings || rings.length < 1 || rings.length > 3) { $("gearInfo").textContent = "クランクの歯数を 1〜3 個、9〜60 の数字で入れてください"; return; }
+  if (!cogs || cogs.length < 5 || cogs.length > 14) { $("gearInfo").textContent = "スプロケットの歯数を 5〜14 個、9〜60 の数字で入れてください"; return; }
+  cfg.rings = [...new Set(rings)].sort((a,b) => b-a);  // 大きい順
+  cfg.cogs = [...new Set(cogs)].sort((a,b) => a-b);    // 小さい順
+  cfg.cogsSet = true;
+  $("sRings").value = cfg.rings.join("-"); $("sCogs").value = cfg.cogs.join("-");
+  knownRing = null; lastGearKey = null; saveCfg(); buildRingBtns(); gearInfo();
+}
+$("sRings").value = cfg.rings.join("-"); $("sCogs").value = cfg.cogs.join("-");
+$("sRings").onchange = applyGears; $("sCogs").onchange = applyGears;
+$("sCasPreset").onchange = () => { if ($("sCasPreset").value) { $("sCogs").value = $("sCasPreset").value; applyGears(); } };
+buildRingBtns(); gearInfo();
+$("bTest").onclick = () => speak("インナーへ、2枚軽く", true);
+
+const bind = (id, key, conv, show) => {
+  const el = $(id); el.value = show ? show(cfg[key]) : cfg[key];
+  el.onchange = () => { cfg[key] = conv(el.value); saveCfg(); };
+};
+const yes = v => v === "1", yn = b => b ? "1" : "0";
+bind("sTarget", "target", Number); bind("sClimbTarget", "climbTarget", Number); bind("sClimbGrade", "climbGrade", Number);
+bind("sTol", "tol", Number); bind("sHold", "hold", Number); bind("sCool", "cooldown", Number);
+bind("sPro", "proactive", yes, yn); bind("sMass", "mass", Number);
+bind("sCirc", "circ", Number); $("sCirc").addEventListener("change", gearInfo); bind("sVoice", "voice", yes, yn); bind("sRate", "rate", Number);
+["dSpd","dCad","dPow","dGrade"].forEach(id => $(id).oninput = () => $(id+"V").textContent = $(id).value);
+
+// ホーム画面に追加
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("bInstall").style.display = ""; });
+$("bInstall").onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("bInstall").style.display = "none"; };
+
+// オフラインでも開けるように
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+// 前回、保存前に閉じた記録を復元
+try { const left = localStorage.getItem(CUR_KEY); if (left) { const r = JSON.parse(left); r.recovered = true; saveRide(r); } } catch(e) {}
+
+const embedded = (() => { try { return window.self !== window.top; } catch(e) { return true; } })();
+if (embedded || location.hash === "#demo") {
+  $("demoBanner").style.display = "block";
+  document.querySelectorAll("details").forEach(d => { if (d.querySelector("#bSim")) d.open = true; });
+} else if (!navigator.bluetooth) showWarn();
+renderHist();
+$("advice").textContent = "停止中";
+</script>
+</body>
+</html>
